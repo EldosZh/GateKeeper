@@ -1,0 +1,22 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres: { image: postgres:17, env: { POSTGRES_USER: gatekeeper, POSTGRES_PASSWORD: gatekeeper, POSTGRES_DB: gatekeeper }, ports: [5432:5432], options: "--health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10" }
+      redis: { image: redis:7, ports: [6379:6379], options: "--health-cmd \"redis-cli ping\" --health-interval 5s --health-timeout 3s --health-retries 10" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.4 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prisma generate
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: docker compose config -q
+      - uses: aquasecurity/trivy-action@0.28.0
+        with: { scan-type: fs, scan-ref: ., format: table, exit-code: '0', ignore-unfixed: true }
