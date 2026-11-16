@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: gatekeeper, POSTGRES_PASSWORD: gatekeeper, POSTGRES_DB: gatekeeper }
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gatekeeper"], interval: 5s, timeout: 3s, retries: 20 }
+    networks: [internal]
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redisdata:/data"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 20 }
+    networks: [internal]
+  control-plane:
+    build: { context: ., dockerfile: apps/control-plane/Dockerfile }
+    environment: { DATABASE_URL: "postgresql://gatekeeper:gatekeeper@postgres:5432/gatekeeper?schema=public", REDIS_URL: "redis://redis:6379", CONTROL_PORT: "8081", JWT_SECRET: "${JWT_SECRET:-replace-this-local-secret-with-32-chars}", ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@example.com}", ADMIN_PASSWORD: "${ADMIN_PASSWORD:-change-this-initial-password}", INTERNAL_TOKEN: "${INTERNAL_TOKEN:-local-development-token}", GATEWAY_METRICS_HOST: "gateway:8080" }
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    ports: ["127.0.0.1:8081:8081"]
+    networks: [internal]
+  gateway:
+    build: { context: ., dockerfile: apps/gateway/Dockerfile }
+    environment: { REDIS_URL: "redis://redis:6379", CONTROL_PLANE_URL: "http://control-plane:8081", INTERNAL_TOKEN: "${INTERNAL_TOKEN:-local-development-token}", GATEWAY_PORT: "8080" }
+    depends_on: { control-plane: { condition: service_started }, redis: { condition: service_healthy } }
+    ports: ["8080:8080"]
+    networks: [internal]
+  dashboard:
+    build: { context: ., dockerfile: apps/dashboard/Dockerfile }
+    environment: { NEXT_PUBLIC_CONTROL_URL: "http://localhost:8081" }
+    depends_on: [control-plane]
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [internal]
+  sample-upstream:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:5678", "-text=GateKeeper sample upstream"]
+    expose: ["5678"]
+    networks: [internal]
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro", "promdata:/prometheus"]
+    ports: ["127.0.0.1:9090:9090"]
+    depends_on: [gateway]
+    networks: [internal]
+volumes: { pgdata: {}, redisdata: {}, promdata: {} }
+networks:
+  internal: { driver: bridge }
